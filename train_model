@@ -1,0 +1,154 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+import os
+import joblib
+
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, roc_auc_score
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+
+warnings.filterwarnings('ignore')
+
+print("\n🛫 Fast Flight Delay Prediction System")
+print("="*60)
+
+# 1. LOAD DATA
+df = pd.read_csv("flight_delays.csv")  # <- change to your actual CSV filename
+
+# OPTIONAL: SAMPLE DATA FOR SPEED UP (REMOVE THIS LINE LATER FOR FULL TRAINING)
+df = df.sample(20000, random_state=42)
+
+# 2. SELECT RELEVANT COLUMNS
+columns_needed = [
+    'month', 'carrier', 'airport', 'arr_flights',
+    'arr_delay',
+    'carrier_delay', 'weather_delay', 'nas_delay', 'security_delay', 'late_aircraft_delay'
+]
+df = df[columns_needed].dropna()
+
+# 3. CREATE TARGET VARIABLE
+df['is_delayed'] = (df['arr_delay'] > 15).astype(int)
+
+# 4. FEATURES AND TARGET
+features = [
+    'month', 'carrier', 'airport', 'arr_flights',
+    'carrier_delay', 'weather_delay', 'nas_delay', 'security_delay', 'late_aircraft_delay'
+]
+X = df[features]
+y = df['is_delayed']
+
+# 5. CATEGORICAL/NUMERICAL
+categorical_features = ['carrier', 'airport']
+numerical_features = ['month', 'arr_flights', 'carrier_delay', 'weather_delay', 'nas_delay', 'security_delay', 'late_aircraft_delay']
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', StandardScaler(), numerical_features),
+        ('cat', OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore'), categorical_features)
+    ],
+    remainder='drop'
+)
+
+# 6. TRAIN/TEST SPLIT
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y)
+
+print(f"Train samples: {X_train.shape[0]}, Test samples: {X_test.shape}")
+print(f"Delay rate in training set: {y_train.mean():.2%}")
+
+# 7. MODEL TRAINING & COMPARISON
+models = {
+    'Logistic Regression': LogisticRegression(random_state=42, max_iter=1000),
+    'Random Forest': RandomForestClassifier(n_estimators=50, random_state=42, n_jobs=-1),
+    'Gradient Boosting': GradientBoostingClassifier(n_estimators=30, random_state=42),
+    'Support Vector Machine': SVC(probability=True, random_state=42, max_iter=500)
+}
+
+results = {}
+trained_models = {}
+for name, model in models.items():
+    print(f"\nTraining {name}...")
+    pipeline = Pipeline([
+        ('preprocessor', preprocessor),
+        ('classifier', model)
+    ])
+    pipeline.fit(X_train, y_train)
+    y_pred = pipeline.predict(X_test)
+    y_proba = pipeline.predict_proba(X_test)[:, 1]
+    accuracy = accuracy_score(y_test, y_pred)
+    roc_auc = roc_auc_score(y_test, y_proba)
+    try:
+        cv_scores = cross_val_score(pipeline, X_train, y_train, cv=3, scoring='accuracy')
+    except Exception as e:
+        cv_scores = np.array([np.nan])
+        print(f"(Cross-validation skipped due to error: {e})")
+    
+    results[name] = {
+        'accuracy': accuracy,
+        'roc_auc': roc_auc,
+        'cv_mean': np.nanmean(cv_scores),
+        'cv_std': np.nanstd(cv_scores),
+        'predictions': y_pred,
+        'probabilities': y_proba
+    }
+    trained_models[name] = pipeline
+    print(f"{name} Accuracy: {accuracy:.4f}, ROC-AUC: {roc_auc:.4f}, CV Mean Accuracy: {np.nanmean(cv_scores):.4f}")
+
+# 8. SELECT BEST MODEL
+best_model_name = max(results, key=lambda k: results[k]['roc_auc'])
+best_model = trained_models[best_model_name]
+print(f"\nBest Model: {best_model_name} with ROC-AUC: {results[best_model_name]['roc_auc']:.4f}")
+
+# 9. DETAILED EVALUATION
+print("\nClassification Report:")
+print(classification_report(y_test, results[best_model_name]['predictions']))
+print("Confusion Matrix:")
+print(confusion_matrix(y_test, results[best_model_name]['predictions']))
+
+# 10. FEATURE IMPORTANCE
+if hasattr(best_model.named_steps['classifier'], 'feature_importances_'):
+    cat_names = list(best_model.named_steps['preprocessor'].named_transformers_['cat'].get_feature_names_out(categorical_features))
+    feature_names = numerical_features + cat_names
+    importances = best_model.named_steps['classifier'].feature_importances_
+    importance_df = pd.DataFrame({'feature': feature_names, 'importance': importances}).sort_values('importance', ascending=False)
+    print("\nTop Feature Importances:")
+    print(importance_df.head(10))
+    plt.figure(figsize=(8,6))
+    plt.barh(importance_df['feature'].head(10), importance_df['importance'].head(10))
+    plt.gca().invert_yaxis()
+    plt.title('Top 10 Feature Importances')
+    plt.show()
+
+# 11. SAVE MODEL SAFELY
+model_path = os.path.join(os.path.dirname(__file__), "flight_delay_model.joblib")
+joblib.dump(best_model, model_path)
+print(f"Model saved at: {model_path}")
+
+# 12. PREDICT FUNCTION DEMO
+def predict_delay(model, flight_data):
+    df_input = pd.DataFrame([flight_data])
+    prob = model.predict_proba(df_input)[0][1]
+    pred = model.predict(df_input)[0]
+    print(f"Prediction: {'Delayed' if pred == 1 else 'On-Time'} (probability: {prob:.1%})")
+    return pred, prob
+
+# DEMO
+sample_flight = {
+    'month': 8,
+    'carrier': '9E',
+    'airport': 'ATL',
+    'arr_flights': 10,
+    'carrier_delay': 5.0,
+    'weather_delay': 1.0,
+    'nas_delay': 0.0,
+    'security_delay': 0.0,
+    'late_aircraft_delay': 3.0
+}
+predict_delay(best_model, sample_flight)
