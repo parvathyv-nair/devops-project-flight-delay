@@ -24,6 +24,7 @@ st.title("🛫 Flight Delay Prediction System")
 st.write("Predict if a flight will be delayed based on historical patterns.")
 
 # Sidebar Inputs
+#commit
 with st.sidebar:
     st.header("✈️ Flight Details")
 
@@ -89,3 +90,4 @@ if hasattr(classifier, "feature_importances_"):
     st.pyplot(fig)
 else:
     st.info("Feature importance not available for this model.")
+
