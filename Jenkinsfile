@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_IMAGE = "vanshikakoshti/flight-delay-app:latest"
+        DOCKER_IMAGE = "koshti/flight-delay-app:latest"
     }
 
     stages {
